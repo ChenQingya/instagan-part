@@ -3,6 +3,10 @@ import torch.nn as nn
 from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
+from torch.nn.parameter import Parameter
+from util.image_pool import ImagePool
+from torch.autograd import Variable
+import torch.autograd as autograd
 
 ###############################################################################
 # Helper Functions
@@ -71,7 +75,7 @@ def init_net(net, init_type='normal', init_gain=0.02, gpu_ids=[]):
     return net
 
 
-def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
+def define_G(input_nc, ins_per,output_nc, ngf, netG, norm='batch', use_dropout=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
     net = None
     norm_layer = get_norm_layer(norm_type=norm)
 
@@ -79,12 +83,14 @@ def define_G(input_nc, output_nc, ngf, netG, norm='batch', use_dropout=False, in
         net = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
     elif netG == 'set':
         net = ResnetSetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
+    elif netG == 'object':
+        net = ObjectGenerator(input_nc,ins_per, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9)
     else:
         raise NotImplementedError('Generator model name [%s] is not recognized' % netG)
     return init_net(net, init_type, init_gain, gpu_ids)
 
 
-def define_D(input_nc, ndf, netD, n_layers_D=3, norm='batch', use_sigmoid=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
+def define_D(input_nc, ins_per, ndf, netD, n_layers_D=3, norm='batch', use_sigmoid=False, init_type='normal', init_gain=0.02, gpu_ids=[]):
     net = None
     norm_layer = get_norm_layer(norm_type=norm)
 
@@ -92,6 +98,8 @@ def define_D(input_nc, ndf, netD, n_layers_D=3, norm='batch', use_sigmoid=False,
         net = NLayerDiscriminator(input_nc, ndf, n_layers=3, norm_layer=norm_layer, use_sigmoid=use_sigmoid)
     elif netD == 'set':
         net = NLayerSetDiscriminator(input_nc, ndf, n_layers=3, norm_layer=norm_layer, use_sigmoid=use_sigmoid)
+    elif netD == 'object':
+        net = ObjectDiscriminator(input_nc, ins_per, ndf, n_layers=3, norm_layer=norm_layer, use_sigmoid=use_sigmoid)
     else:
         raise NotImplementedError('Discriminator model name [%s] is not recognized' % net)
     return init_net(net, init_type, init_gain, gpu_ids)
@@ -325,6 +333,79 @@ class ResnetSetGenerator(nn.Module):
                 out += [segs[:, i, :, :].unsqueeze(1)]  # skip empty segmentation
         return torch.cat(out, dim=1)
 
+class ObjectGenerator(nn.Module):
+    def __init__(self, input_nc, ins_per, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=9, padding_type='reflect'):
+        assert(n_blocks >= 0)   # 默认9个resnet block
+        super(ObjectGenerator, self).__init__()
+        self.input_nc = input_nc
+        self.output_nc = output_nc
+        self.ngf = ngf
+        if type(norm_layer) == functools.partial:           # functools.partial：是一种类型。输入：type(functools.partial),输出type. 判断norm_layer的类型是不是偏函数
+            use_bias = norm_layer.func == nn.InstanceNorm2d # 是偏函数
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d      # 不是偏函数
+
+        model_img = [nn.ReflectionPad2d(3),     # [1,3,206,206]
+                                                            #  加padding，padding的值，为对称关系，refer：https://pytorch.org/docs/stable/nn.html#reflectionpad2d
+                 nn.Conv2d(input_nc+ins_per, ngf, kernel_size=7, padding=0,
+                           bias=use_bias),  # [1,64,200,200]
+                 norm_layer(ngf),           # [1,64,200,200]instancenorm的输出大小与输入相同
+                 nn.ReLU(True)]             # [1,64,200,200]与输入相同
+        model_seg = [nn.ReflectionPad2d(3),  # [1,3,206,206]
+                 #  加padding，padding的值，为对称关系，refer：https://pytorch.org/docs/stable/nn.html#reflectionpad2d
+                 nn.Conv2d(input_nc + ins_per, ngf, kernel_size=7, padding=0,
+                           bias=use_bias),  # [1,64,200,200]
+                 norm_layer(ngf),  # [1,64,200,200]instancenorm的输出大小与输入相同
+                 nn.ReLU(True)]  # [1,64,200,200]与输入相同
+
+        n_downsampling = 2
+        for i in range(n_downsampling):
+            mult = 2**i # 计算2的i次方
+            model_img += [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3,
+                                stride=2, padding=1, bias=use_bias),
+                      norm_layer(ngf * mult * 2),
+                      nn.ReLU(True)]
+            model_seg += [nn.Conv2d(ngf * mult, ngf * mult * 2, kernel_size=3,
+                                stride=2, padding=1, bias=use_bias),
+                      norm_layer(ngf * mult * 2),
+                      nn.ReLU(True)]
+
+        mult = 2**n_downsampling
+        for i in range(n_blocks):
+            model_img += [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
+            model_seg += [ResnetBlock(ngf * mult, padding_type=padding_type, norm_layer=norm_layer, use_dropout=use_dropout, use_bias=use_bias)]
+
+        for i in range(n_downsampling):
+            mult = 2**(n_downsampling - i)
+            model_img += [nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2),
+                                         kernel_size=3, stride=2,
+                                         padding=1, output_padding=1,
+                                         bias=use_bias),
+                      norm_layer(int(ngf * mult / 2)),
+                      nn.ReLU(True)]
+            model_seg += [nn.ConvTranspose2d(ngf * mult, int(ngf * mult / 2),
+                                         kernel_size=3, stride=2,
+                                         padding=1, output_padding=1,
+                                         bias=use_bias),
+                      norm_layer(int(ngf * mult / 2)),
+                      nn.ReLU(True)]
+        model_img += [nn.ReflectionPad2d(3)]
+        model_seg += [nn.ReflectionPad2d(3)]
+        model_img += [nn.Conv2d(ngf, output_nc, kernel_size=7, padding=0)]
+        model_seg += [nn.Conv2d(ngf, ins_per, kernel_size=7, padding=0)]
+        model_img += [nn.Tanh()]
+        model_seg += [nn.Tanh()]
+
+        self.model_img = nn.Sequential(*model_img)
+        self.model_seg = nn.Sequential(*model_seg)
+
+    def forward(self, input):
+        out=[]
+        result_img=self.model_img(input)
+        result_seg=self.model_seg(input)
+        out.append(result_img)
+        out.append(result_seg)
+        return torch.cat(out, dim=1)
 
 # Define a resnet block
 class ResnetBlock(nn.Module):
@@ -498,6 +579,80 @@ class NLayerDiscriminator(nn.Module):
     def forward(self, input):
         return self.model(input)
 
+class ObjectDiscriminator(nn.Module):
+    def __init__(self, input_nc, ins_per, ndf=64, n_layers=3, norm_layer=nn.BatchNorm2d, use_sigmoid=False):
+        super(ObjectDiscriminator, self).__init__()
+        if type(norm_layer) == functools.partial:
+            use_bias = norm_layer.func == nn.InstanceNorm2d
+        else:
+            use_bias = norm_layer == nn.InstanceNorm2d
+
+        kw = 4
+        padw = 1
+        sequence_img = [
+            # Use spectral normalization
+            SpectralNorm(nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw)),
+            nn.LeakyReLU(0.2, True)
+        ]
+        sequence_seg = [
+            # Use spectral normalization
+            SpectralNorm(nn.Conv2d(ins_per, ndf, kernel_size=kw, stride=2, padding=padw)),
+            nn.LeakyReLU(0.2, True)
+        ]
+
+        nf_mult = 1
+        nf_mult_prev = 1
+        for n in range(1, n_layers):
+            nf_mult_prev = nf_mult
+            nf_mult = min(2**n, 8)
+            sequence_img += [
+                # Use spectral normalization
+                SpectralNorm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw, bias=use_bias)),
+                norm_layer(ndf * nf_mult),
+                nn.LeakyReLU(0.2, True)
+            ]
+            sequence_seg += [
+                # Use spectral normalization
+                SpectralNorm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=2, padding=padw,
+                                       bias=use_bias)),
+                norm_layer(ndf * nf_mult),
+                nn.LeakyReLU(0.2, True)
+            ]
+
+        nf_mult_prev = nf_mult
+        nf_mult = min(2**n_layers, 8)
+        sequence_img += [
+            # Use spectral normalization
+            SpectralNorm(nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
+            norm_layer(ndf * nf_mult),
+            nn.LeakyReLU(0.2, True)
+        ]
+        sequence_seg += [
+            # Use spectral normalization
+            SpectralNorm(
+                nn.Conv2d(ndf * nf_mult_prev, ndf * nf_mult, kernel_size=kw, stride=1, padding=padw, bias=use_bias)),
+            norm_layer(ndf * nf_mult),
+            nn.LeakyReLU(0.2, True)
+        ]
+
+        # Use spectral normalization
+        sequence_img += [SpectralNorm(nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw))]
+        sequence_seg += [SpectralNorm(nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw))]
+
+        if use_sigmoid:
+            sequence_img += [nn.Sigmoid()]
+            sequence_seg += [nn.Sigmoid()]
+
+        self.model_img = nn.Sequential(*sequence_img)
+        self.model_seg = nn.Sequential(*sequence_seg)
+
+    def forward(self, input):
+        input_img = input[:, :3, :, :]  # (B, CX, W, H) torch.Size([1, 3, 256, 256])
+        input_seg = input[:, 3:, :, :]
+        result_img = self.model_img(input_img)
+        result_seg = self.model_seg(input_seg)
+        result = torch.cat([result_img, result_seg], dim=1)
+        return result
 
 # PatchGAN discriminator for "set" of instance attributes
 # See https://openreview.net/forum?id=ryxwJhC9YX for details

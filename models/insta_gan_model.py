@@ -6,6 +6,7 @@ from . import networks
 import numpy as np
 import copy
 
+from featuresimilarityloss.feature_similarity_loss import Feature_Similarity_Loss
 
 class InstaGANModel(BaseModel):
 	def name(self):
@@ -24,6 +25,7 @@ class InstaGANModel(BaseModel):
 			parser.add_argument('--lambda_idt', type=float, default=1.0, help='use identity mapping. Setting lambda_idt other than 0 has an effect of scaling the weight of the identity mapping loss')
 			# what's the difference between ctx and idt?
 			parser.add_argument('--lambda_ctx', type=float, default=1.0, help='use context preserving. Setting lambda_ctx other than 0 has an effect of scaling the weight of the context preserving loss')
+			parser.add_argument('--lambda_fs', type=float, default=10.0, help='use feature similarity. Setting lambda_fs other than 0 has an effect of scaling the weight of the feature similarity loss')
 
 		return parser
 
@@ -254,6 +256,7 @@ class InstaGANModel(BaseModel):
 		lambda_B = self.opt.lambda_B										# 用于backward B
 		lambda_idt = self.opt.lambda_idt									# 用于loss_idt_A和loss_idt_B
 		lambda_ctx = self.opt.lambda_ctx
+		lambda_fs = self.opt.lambda_fs
 
 		# backward A
 		if self.forward_A:
@@ -262,12 +265,20 @@ class InstaGANModel(BaseModel):
 			self.loss_idt_B = self.criterionIdt(self.netG_B(self.real_A_sng), self.real_A_sng.detach()) * lambda_A * lambda_idt			# self.real_A_sng.detach()
 			weight_A = self.get_weight_for_ctx(self.real_A_seg_sng, self.fake_B_seg_sng)
 			self.loss_ctx_A = self.weighted_L1_loss(self.real_A_img_sng, self.fake_B_img_sng, weight=weight_A) * lambda_A * lambda_ctx
+			layers = {"conv_1_1": 1.0, "conv_3_2": 1.0}
+			I = self.fake_B_img_sng  # 生成的B域的图
+			T = self.real_B_img_sng  # 目标域B的真实图
+			I_multiply = self.fake_B_seg_mul * I
+			T_multiply = self.real_B_seg_sng * T
+			feature_similarity_loss = Feature_Similarity_Loss(layers, max_1d_size=64).cuda()
+            # print('fsloss_A', feature_similarity_loss(I_multiply, T_multiply))
+			self.loss_fs_A = feature_similarity_loss(I_multiply, T_multiply)[0] * lambda_fs
 		else:
 			self.loss_G_A = 0
 			self.loss_cyc_A = 0
 			self.loss_idt_B = 0
 			self.loss_ctx_A = 0
-
+			self.loss_fs_A = 0
 		# backward B
 		if self.forward_B:
 			self.loss_G_B = self.criterionGAN(self.netD_B(self.fake_A_mul), True)
@@ -275,14 +286,24 @@ class InstaGANModel(BaseModel):
 			self.loss_idt_A = self.criterionIdt(self.netG_A(self.real_B_sng), self.real_B_sng.detach()) * lambda_B * lambda_idt
 			weight_B = self.get_weight_for_ctx(self.real_B_seg_sng, self.fake_A_seg_sng)
 			self.loss_ctx_B = self.weighted_L1_loss(self.real_B_img_sng, self.fake_A_img_sng, weight=weight_B) * lambda_B * lambda_ctx
+
+			layers = {"conv_1_1": 1.0, "conv_3_2": 1.0}
+			I = self.fake_A_img_sng  # 生成的B域的图
+			T = self.real_A_img_sng  # 目标域B的真实图
+			I_multiply = self.fake_A_seg_mul * I
+			T_multiply = self.real_A_seg_sng * T
+			feature_similarity_loss = Feature_Similarity_Loss(layers, max_1d_size=64).cuda()
+            # print('fsloss_B', feature_similarity_loss(I_multiply, T_multiply))
+			self.loss_fs_B = feature_similarity_loss(I_multiply, T_multiply)[0] * lambda_fs
 		else:
 			self.loss_G_B = 0
 			self.loss_cyc_B = 0
 			self.loss_idt_A = 0
 			self.loss_ctx_B = 0
-
+			self.loss_fs_B = 0
 		# combined loss
-		self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cyc_A + self.loss_cyc_B + self.loss_idt_A + self.loss_idt_B + self.loss_ctx_A + self.loss_ctx_B
+		# self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cyc_A + self.loss_cyc_B + self.loss_idt_A + self.loss_idt_B + self.loss_ctx_A + self.loss_ctx_B
+		self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cyc_A + self.loss_cyc_B + self.loss_idt_A + self.loss_idt_B + self.loss_ctx_A + self.loss_ctx_B + self.loss_fs_A + self.loss_fs_B
 		self.loss_G.backward()	# 生成器A和生成器B的各种loss为总G的loss，反向传播
 
 	def backward_D_basic(self, netD, real, fake):

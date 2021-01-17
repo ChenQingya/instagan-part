@@ -36,7 +36,8 @@ class InstaGANModel(BaseModel):
 																			# “//”，在python中，整数除法，这个叫“地板除”，3//2=1
 
 		# specify the training losses you want to print out. The program will call base_model.get_current_losses
-		self.loss_names = ['D_A', 'G_A', 'cyc_A', 'idt_A', 'ctx_A', 'D_B', 'G_B', 'cyc_B', 'idt_B', 'ctx_B']
+		# self.loss_names = ['D_A', 'G_A', 'cyc_A', 'idt_A', 'ctx_A', 'D_B', 'G_B', 'cyc_B', 'idt_B', 'ctx_B']
+		self.loss_names = ['D_A', 'G_A', 'cyc_A', 'idt_A', 'fs_A', 'D_B', 'G_B', 'cyc_B', 'idt_B', 'fs_B']
 
 		# specify the images you want to save/display. The program will call base_model.get_current_visuals
 		visual_names_A_img = ['real_A_img', 'fake_B_img', 'rec_A_img']

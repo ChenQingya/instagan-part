@@ -303,7 +303,7 @@ class InstaGANModel(BaseModel):
 			self.loss_fs_B = 0
 		# combined loss
 		# self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cyc_A + self.loss_cyc_B + self.loss_idt_A + self.loss_idt_B + self.loss_ctx_A + self.loss_ctx_B
-		self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cyc_A + self.loss_cyc_B + self.loss_idt_A + self.loss_idt_B + self.loss_ctx_A + self.loss_ctx_B + self.loss_fs_A + self.loss_fs_B
+		self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cyc_A + self.loss_cyc_B + self.loss_idt_A + self.loss_idt_B + self.loss_fs_A + self.loss_fs_B
 		self.loss_G.backward()	# 生成器A和生成器B的各种loss为总G的loss，反向传播
 
 	def backward_D_basic(self, netD, real, fake):

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*
 import os
 from options.test_options import TestOptions
 from data import CreateDataLoader

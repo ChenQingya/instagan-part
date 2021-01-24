@@ -25,6 +25,7 @@ class InstaGANModel(BaseModel):
 			parser.add_argument('--lambda_idt', type=float, default=1.0, help='use identity mapping. Setting lambda_idt other than 0 has an effect of scaling the weight of the identity mapping loss')
 			# what's the difference between ctx and idt?
 			parser.add_argument('--lambda_ctx', type=float, default=1.0, help='use context preserving. Setting lambda_ctx other than 0 has an effect of scaling the weight of the context preserving loss')
+			parser.add_argument('--lambda_fs', type=float, default=10.0, help='use feature similarity. Setting lambda_fs other than 0 has an effect of scaling the weight of the feature similarity loss')
 			parser.add_argument('--lambda_fs', type=float, default=1.0, help='use feature similarity. Setting lambda_fs other than 0 has an effect of scaling the weight of the feature similarity loss')
 
 		return parser

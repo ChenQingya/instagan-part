@@ -59,3 +59,5 @@ if __name__ == '__main__':
         print('Current Total Time Taken: %d sec' %
               (time.time() - total_start_time))
         model.update_learning_rate()
+
+

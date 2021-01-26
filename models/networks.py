@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*
 import torch
 import torch.nn as nn
 from torch.nn import init
@@ -7,7 +8,7 @@ from torch.nn.parameter import Parameter
 from util.image_pool import ImagePool
 from torch.autograd import Variable
 import torch.autograd as autograd
-
+from thop import profile
 ###############################################################################
 # Helper Functions
 ###############################################################################
@@ -310,17 +311,23 @@ class ResnetSetGenerator(nn.Module):
             mean[0] = 1  # forward at least one segmentation
 
         # run encoder
+        flop, para = profile(self.encoder_img, inputs=(img,))
+        print("instagan set encoder img flop : %.2fM" % (flop / 1e6), "%.2fM" % (para / 1e6))
         enc_img = self.encoder_img(img)
         enc_segs = list()
         for i in range(segs.size(1)):
             if mean[i] > 0:  # skip empty segmentation
                 seg = segs[:, i, :, :].unsqueeze(1)
                 enc_segs.append(self.encoder_seg(seg))
+                flop, para = profile(self.encoder_seg, inputs=(seg,))
+                print("instagan set encoder seg flop : %.2fM" % (flop / 1e6), "%.2fM" % (para / 1e6))
         enc_segs = torch.cat(enc_segs)
         enc_segs_sum = torch.sum(enc_segs, dim=0, keepdim=True)  # aggregated set feature
 
         # run decoder
         feat = torch.cat([enc_img, enc_segs_sum], dim=1)
+        flop, para = profile(self.decoder_img, inputs=(feat,))
+        print("instagan set decoder img flop : %.2fM" % (flop / 1e6), "%.2fM" % (para / 1e6))
         out = [self.decoder_img(feat)]
         idx = 0
         for i in range(segs.size(1)):
@@ -329,6 +336,8 @@ class ResnetSetGenerator(nn.Module):
                 idx += 1  # move to next index
                 feat = torch.cat([enc_seg, enc_img, enc_segs_sum], dim=1)
                 out += [self.decoder_seg(feat)]
+                flop, para = profile(self.decoder_seg, inputs=(feat,))
+                print("instagan set decoder seg flop : %.2fM" % (flop / 1e6), "%.2fM" % (para / 1e6))
             else:
                 out += [segs[:, i, :, :].unsqueeze(1)]  # skip empty segmentation
         return torch.cat(out, dim=1)
@@ -401,6 +410,10 @@ class ObjectGenerator(nn.Module):
 
     def forward(self, input):
         out=[]
+        flop, para = profile(self.model_img, inputs=(input,))
+        print("object g img flop : %.2fM" % (flop / 1e6), "%.2fM" % (para / 1e6))
+        flop, para = profile(self.model_seg, inputs=(input,))
+        print("object g seg flop : %.2fM" % (flop / 1e6), "%.2fM" % (para / 1e6))
         result_img=self.model_img(input)
         result_seg=self.model_seg(input)
         out.append(result_img)
@@ -577,6 +590,9 @@ class NLayerDiscriminator(nn.Module):
         self.model = nn.Sequential(*sequence)
 
     def forward(self, input):
+        flop, para = profile(self.model, inputs=(input,))
+        print("nlayer dis flop : %.2fM" % (flop / 1e6), "%.2fM" % (para / 1e6))
+
         return self.model(input)
 
 class ObjectDiscriminator(nn.Module):
@@ -649,6 +665,11 @@ class ObjectDiscriminator(nn.Module):
     def forward(self, input):
         input_img = input[:, :3, :, :]  # (B, CX, W, H) torch.Size([1, 3, 256, 256])
         input_seg = input[:, 3:, :, :]
+
+        flop, para = profile(self.model_img, inputs=(input_img,))
+        print("img dis flop : %.2fM" % (flop / 1e6), "%.2fM" % (para / 1e6))
+        flop, para = profile(self.model_seg, inputs=(input_seg,))
+        print("seg dis flop : %.2fM" % (flop / 1e6), "%.2fM" % (para / 1e6))
         result_img = self.model_img(input_img)
         result_seg = self.model_seg(input_seg)
         result = torch.cat([result_img, result_seg], dim=1)
@@ -714,6 +735,8 @@ class NLayerSetDiscriminator(nn.Module):
             mean[0] = 1  # forward at least one segmentation
 
         # run feature extractor
+        flop, para = profile(self.feature_img, inputs=(img,))
+        print("nsetlayer dis feature flop : %.2fM" % (flop / 1e6), "%.2fM" % (para / 1e6))
         feat_img = self.feature_img(img)
         feat_segs = list()
         for i in range(segs.size(1)):
@@ -724,6 +747,8 @@ class NLayerSetDiscriminator(nn.Module):
 
         # run classifier
         feat = torch.cat([feat_img, feat_segs_sum], dim=1)
+        flop, para = profile(self.classifier, inputs=(feat,))
+        print("nsetlayer dis classfier flop : %.2fM" % (flop / 1e6), "%.2fM" % (para / 1e6))
         out = self.classifier(feat)
         return out
 
